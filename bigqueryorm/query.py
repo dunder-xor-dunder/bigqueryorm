@@ -78,7 +78,13 @@ class _Comparison:
 
 
 class Count:
-    pass
+
+    def __init__(self, selected, *, name):
+        self.selected = selected
+        self.name = name
+
+    def sql(self):
+        return f"COUNT({self.selected}) AS {self.name}"
 
 
 class _Selection:
@@ -89,7 +95,10 @@ class _Selection:
     def sql(self):
         query = ""
         for sel in self.selection:
-            query = f"{query}{sel}"
+            if isinstance(sel, str):
+                query = f"{query}{sel}"
+            else:
+                query = f"{query}{sel.sql()}"
             if sel is not self.selection[-1]:
                 query = f"{query}, "
         return query
@@ -103,24 +112,37 @@ class _Query:
         *,
         table,
         selection,
+        grouping,
         filters: List[List[_Comparison]],
     ):
         self.table = table
         self.selection = selection
         self.filters = filters
+        self.grouping = grouping
         self.limit_ = limit_
+
+    def copy(self):
+        return {
+            "table": self.table,
+            "selection": self.selection,
+            "grouping": self.grouping,
+            "filters": self.filters,
+            "limit_": self.limit_,
+        }
 
     def filter(self, **kwargs):
         comparisons = [
             _Comparison._parse(key, val)
             for key, val in kwargs.items()
         ]
-        return _Query(
-            table=self.table,
-            selection=self.selection,
-            filters=self.filters + [comparisons],
-            limit_=self.limit_,
-        )
+        copy = self.copy()
+        copy["filters"] = self.filters + [comparisons]
+        return _Query(**copy)
+
+    def group_by(self, *args):
+        copy = self.copy()
+        copy["grouping"] = _Selection(args)
+        return _Query(**copy)
 
     def limit(self, value: int):
         if value < 0:
@@ -144,6 +166,8 @@ class _Query:
                 query = f"{query} AND "
         if self.filters:
             query = f"{query})\n"
+        if self.grouping:
+            query = f"{query}GROUP BY {self.grouping.sql()}\n"
         if self.limit:
             query = f"{query}LIMIT {self.limit_}"
         return query
@@ -152,7 +176,6 @@ class _Query:
 class _Table:
 
     def __init__(self, name: str, *, row_cls):
-        self.selection = _Selection(["*"])
         split = name.split(".")
         if len(split) == 2:
             self.project, self.dataset, self.table = None, *split
@@ -168,8 +191,17 @@ class _Table:
         ]
         return _Query(
             table=self,
-            selection=self.selection,
+            selection=_Selection(["*"]),
             filters=[comparisons],
+            grouping=None,
+        )
+
+    def values(self, *args):
+        return _Query(
+            table=self,
+            selection=_Selection(args),
+            filters=[],
+            grouping=None,
         )
 
     @property
@@ -212,4 +244,10 @@ def declare_row(klass) -> type:
     klass.table = table
     klass.parse = parse
 
-    return dataclass(klass)
+    klass = dataclass(klass)
+
+    # To reference columns like ExampleRow.test
+    for column in klass._columns():
+        setattr(klass, column, column)
+
+    return klass
