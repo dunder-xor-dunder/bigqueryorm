@@ -18,12 +18,12 @@ def _split_op(key: str) -> Tuple[str, Operator]:
     *column_names, op = key.split("__")
     if not column_names:
         # like foo="bar", assume EQ
-        return column_names, Operator.EQ
+        return [op], Operator.EQ
     try:
         op = Operator[op.upper()]
     except KeyError:
         raise ValueError(f"{op} does not appear to be a valid comparison operator")
-    return column_names, Operator[op.upper()]
+    return column_names, op
 
 
 class _Value:
@@ -33,7 +33,7 @@ class _Value:
 
     def sql(self):
         if isinstance(self.value, (int, float)):
-            return str(self)
+            return str(self.value)
         elif isinstance(self.value, str):
             return json.dumps(self.value)
             """
@@ -72,7 +72,12 @@ class _Comparison:
                 return f"({col_names} IS NOT NULL"
             else:
                 raise ValueError(f"cannot use {self.op.name} with NULL comparison")
-        return f"({col_names} {self.op.value} {self.rhs.sql()})"
+        rhs = self.rhs.sql()
+        return f"({col_names} {self.op.value} {rhs})"
+
+
+class Count:
+    pass
 
 
 class _Selection:
@@ -92,7 +97,9 @@ class _Selection:
 class _Query:
 
     def __init__(
-        self, *,
+        self,
+        limit_=None,
+        *,
         table,
         selection,
         filters: List[List[_Comparison]],
@@ -100,7 +107,7 @@ class _Query:
         self.table = table
         self.selection = selection
         self.filters = filters
-        self.limit = None
+        self.limit_ = limit_
 
     def filter(self, **kwargs):
         comparisons = [
@@ -111,21 +118,22 @@ class _Query:
             table=self.table,
             selection=self.selection,
             filters=self.filters + [comparisons],
-            limit=self.limit,
+            limit_=self.limit_,
         )
 
     def limit(self, value: int):
         if value < 0:
             raise ValueError(f"limit cannot be negative: {value!r}")
-        self.limit = value
+        self.limit_ = value
+        return self
 
     def sql(self):
         query = f"SELECT {self.selection.sql()}\n"
-        query = f"FROM {self.table.name}\n"
+        query = f"{query}FROM {self.table.name}\n"
         if self.filters:
-            query = f"{query}\nWHERE (\n"
+            query = f"{query}WHERE ("
         for filter_set in self.filters:
-            query = f"{query}\n("
+            query = f"{query}("
             for comp in filter_set:
                 query = f"{query}{comp.sql()}"
                 if comp is not filter_set[-1]:
@@ -133,11 +141,10 @@ class _Query:
             query = f"{query})"
             if filter_set is not self.filters[-1]:
                 query = f"{query} AND "
-            query = f"{query})\n"
         if self.filters:
-            query = f"{query}\n)\n"
+            query = f"{query})\n"
         if self.limit:
-            query = f"{query}LIMIT {self.limit}"
+            query = f"{query}LIMIT {self.limit_}"
         return query
 
 
@@ -163,6 +170,10 @@ class _Table:
             selection=self.selection,
             filters=[comparisons],
         )
+
+    @property
+    def name(self):
+        return f"{self.project}.{self.dataset}.{self.table}"
 
 
 def declare_row(klass) -> type:
