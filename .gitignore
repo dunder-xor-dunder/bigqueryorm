@@ -9,3 +9,4 @@ bigqueryorm.egg*
 .cache/*
 .ropeproject/*
 a.py
+run.sh
