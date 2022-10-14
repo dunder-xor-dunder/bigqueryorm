@@ -1,0 +1,2 @@
+class BigQueryORMError(ValueError):
+    pass
