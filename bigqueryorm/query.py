@@ -1,6 +1,7 @@
 import json
 from enum import Enum
 from typing import Dict, Any, Tuple, List
+from dataclasses import dataclass
 
 
 class Operator(Enum):
@@ -176,6 +177,17 @@ class _Table:
         return f"{self.project}.{self.dataset}.{self.table}"
 
 
+class Client:
+
+    def __init__(self, bq_client: Any):
+        self._client = bq_client
+
+    def query(self, result_class: type, query: _Query) -> Any:
+        sql = query.sql()
+        for row in self._client.query(sql):
+            yield result_class.parse(row)
+
+
 def declare_row(klass) -> type:
 
     @classmethod
@@ -186,7 +198,18 @@ def declare_row(klass) -> type:
     def table(cls, name: str) -> _Table:
         return _Table(name, row_cls=cls)
 
+    @classmethod
+    def parse(cls, row: Any) -> Any:
+        kwargs = {}
+        for column, type_ in cls._columns().items():
+            if type_ is Dict:
+                kwargs[column] = json.loads(getattr(row, column))
+            else:
+                kwargs[column] = getattr(row, column)
+        return cls(**kwargs)
+
     klass._columns = _columns
     klass.table = table
+    klass.parse = parse
 
-    return klass
+    return dataclass(klass)
